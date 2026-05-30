@@ -1,107 +1,129 @@
 # UB-Share Signaling Server
 
-Lightweight WebSocket server for peer discovery and WebRTC signaling. No files pass through this server — it only relays connection handshakes.
+**A lightweight matchmaker — not a file server.**
 
-## What It Does
+This is the signaling server for UB-Share. It helps devices find each other and establish direct connections. That's it. No files ever pass through this server, no data is stored, and no heavy processing happens here.
 
-1. **Peer registration** — peers connect and announce themselves
-2. **Peer discovery** — peers can see who else is online
-3. **WebRTC signaling** — relays SDP offers/answers and ICE candidates
-4. **Shared file catalog** — peers broadcast their shared file list
+---
 
-Once two peers establish a WebRTC DataChannel, the signaling server is no longer involved in the transfer.
+## What This Server Does
 
-## Setup
+The signaling server has exactly **three jobs**:
 
-```bash
-npm install
-```
+### 1. Peer Registration
+When a UB-Share device comes online, it registers with this server — announcing its peer ID and display name. When it goes offline, it's removed.
 
-## Development
+### 2. Peer Discovery
+Devices can see who else is online. The server maintains a simple in-memory list of connected peers and broadcasts join/leave events in real time.
 
-```bash
-npm run dev
-```
+### 3. WebRTC Handshake Relay
+When two devices want to connect, they need to exchange a small amount of connection metadata (SDP offers, SDP answers, ICE candidates). The signaling server relays these messages between the two peers. This handshake is typically a few kilobytes and takes less than a second.
 
-Uses `tsx watch` for auto-reload on changes.
+**Once the handshake completes, the server is done.** The two devices establish a direct WebRTC DataChannel and transfer files between themselves at full speed — the server plays no further role.
 
-## Production
+---
 
-```bash
-npm run build    # Compile TypeScript → dist/
-npm start        # Run compiled JS
-```
+## What This Server Does NOT Do
 
-## API Endpoints
+| ❌ | Description |
+|----|-------------|
+| **No file storage** | Files never touch this server. Zero disk usage for transfers. |
+| **No file relay** | Data flows directly between peers, not through the server. |
+| **No user accounts** | No sign-ups, no passwords, no databases. |
+| **No persistent storage** | All state is in-memory. Restart the server and it starts fresh. |
+| **No heavy compute** | Just a WebSocket relay. A free-tier cloud instance handles thousands of peers. |
+| **No file metadata** | The server doesn't know what files are being sent, their names, or sizes. |
 
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | `/health` | Health check (status, uptime, peer count) |
-| GET | `/api/peers` | List online peers |
-| GET | `/api/peers/count` | Online peer count |
+---
 
-## Socket.IO Events
-
-### Client → Server
-
-| Event | Payload | Description |
-|-------|---------|-------------|
-| `peer:register` | `{ peerId, displayName, sharedFiles }` | Register as online |
-| `peer:update-files` | `{ files }` | Update shared file list |
-| `signal:offer` | `{ targetPeerId, offer }` | Send WebRTC SDP offer |
-| `signal:answer` | `{ targetPeerId, answer }` | Send WebRTC SDP answer |
-| `signal:ice-candidate` | `{ targetPeerId, candidate }` | Send ICE candidate |
-
-### Server → Client
-
-| Event | Payload | Description |
-|-------|---------|-------------|
-| `peer:joined` | `PeerInfo` | A new peer came online |
-| `peer:left` | `{ peerId }` | A peer went offline |
-| `peer:list` | `PeerInfo[]` | Full list of online peers |
-| `signal:offer` | `{ fromPeerId, offer }` | Incoming WebRTC offer |
-| `signal:answer` | `{ fromPeerId, answer }` | Incoming WebRTC answer |
-| `signal:ice-candidate` | `{ fromPeerId, candidate }` | Incoming ICE candidate |
-
-## Environment Variables
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `PORT` | `3001` | Server port |
-| `NODE_ENV` | `development` | Environment |
-
-## Deploy to Render
-
-1. Push this repo to GitHub
-2. Go to [render.com](https://render.com) → **New → Web Service**
-3. Connect your repo
-4. Set **Root Directory** to `server`
-5. **Build Command:** `npm install && npm run build`
-6. **Start Command:** `npm start`
-7. Select **Free** plan
-8. Deploy
-
-Or use the Blueprint: Dashboard → **Blueprints** → connect repo → Render auto-detects `render.yaml`.
-
-Your server will be at `https://your-service.onrender.com`.
-
-> **Note:** Free tier spins down after 15 min of inactivity. First connection after spin-down takes ~30s.
-
-### After deployment
-
-Update the desktop app's signaling server URL:
-**Settings → Network → Signaling Server URL** → `https://your-service.onrender.com`
-
-## Project Structure
+## Architecture
 
 ```
-server/
-├── src/
-│   ├── index.ts           ← Express + Socket.IO entry
-│   ├── signaling.ts       ← Socket event handlers
-│   └── peer-manager.ts    ← In-memory peer registry
-├── package.json
-├── tsconfig.json
-├── render.yaml            ← Render deployment config
-└── railway.json           ← Railway deployment config
+┌──────────┐        WebSocket        ┌──────────┐
+│ Device A │ ◄─────────────────────► │  Server  │
+└──────────┘                         │          │
+                                     │  (relay  │
+┌──────────┐        WebSocket        │  only)   │
+│ Device B │ ◄─────────────────────► │          │
+└──────────┘                         └──────────┘
+      ▲                                    
+      │      Direct WebRTC DataChannel     
+      │◄══════════════════════════════►    
+      │   (Server not involved here)       
+      ▼                                    
+┌──────────┐                               
+│ Device A │                               
+└──────────┘                               
 ```
+
+The server is a **stateless WebSocket relay**. It uses:
+- **Express** — health check endpoint
+- **Socket.IO** — real-time bidirectional communication
+- **In-memory peer registry** — no database needed
+
+---
+
+## Resource Usage
+
+This server is intentionally minimal:
+
+| Resource | Usage |
+|----------|-------|
+| **Memory** | ~50 MB base + ~1 KB per connected peer |
+| **CPU** | Negligible — just relaying small JSON messages |
+| **Disk** | Zero — no files stored, no database |
+| **Bandwidth** | Minimal — only handshake messages (a few KB per connection) |
+| **Startup** | < 1 second |
+
+A **free-tier Render/Railway instance** is more than enough to serve hundreds of concurrent peers.
+
+---
+
+## Hosting
+
+The server is designed to run on any free cloud platform:
+
+- **Render** — free web service tier (auto-sleeps after 15 min idle)
+- **Railway** — free starter plan
+- **Fly.io** — free tier with persistent VMs
+- **Any VPS** — minimal resources needed
+
+> **Free tier note:** Platforms like Render spin down free services after inactivity. The first connection after spin-down takes ~30 seconds. After that, it stays warm as long as peers are connected.
+
+---
+
+## API
+
+### Health Check
+
+```
+GET /health
+```
+
+Returns server status, uptime, and connected peer count. Useful for monitoring and keep-alive pings.
+
+### Peer Count
+
+```
+GET /api/peers/count
+```
+
+Returns the number of currently connected peers.
+
+---
+
+## Privacy
+
+- The server **never** sees file contents, filenames, or file sizes
+- Connection metadata (SDP/ICE) is relayed in real-time and **never stored**
+- Peer lists are in-memory only — lost on server restart
+- No logging of transfer activity
+- No analytics, no tracking, no telemetry
+
+The server is open source. You can inspect every line, host your own instance, and verify that no data is collected.
+
+---
+
+## License
+
+MIT
